@@ -1,1 +1,2 @@
-# DEPI_HealthNux
+# DEPI_SNAMI
+DEPI Project
