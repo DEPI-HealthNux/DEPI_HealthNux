@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: depi-healthnux-airflow
+    env: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: AIRFLOW_HOME
+        value: /home/airflow
+      - key: AIRFLOW__CORE__EXECUTOR
+        value: LocalExecutor
+      - key: AIRFLOW__CORE__DAGS_FOLDER
+        value: /home/airflow/dags
+      - key: AIRFLOW__CORE__LOAD_EXAMPLES
+        value: "false"
+      - key: NEON_HOST
+        sync: false
+      - key: NEON_USER
+        sync: false
+      - key: NEON_PASSWORD
+        sync: false
+      - key: NEON_DATABASE
+        value: neondb
+      - key: BIGQUERY_PROJECT
+        value: depihealthnux
+      - key: BIGQUERY_DATASET
+        value: Depihealthnux_Main
+      - key: MEDICATIONS_SHEET_URL
+        sync: false
