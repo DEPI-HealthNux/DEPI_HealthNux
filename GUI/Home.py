@@ -1,5 +1,10 @@
 from nicegui import ui
 import Pages.Patients_List
+from Components.Navigation import navigation_bar
+import Pages.Settings
+from Pages.Settings import (
+    get_doctors
+)
 @ui.page('/')
 def home_page():
     # =====================================================
@@ -41,8 +46,8 @@ def home_page():
 
     def open_settings():
 
-        ui.notify(
-            'Settings Page Coming Soon'
+        ui.navigate.to(
+            '/settings'
         )
 
     # =====================================================
@@ -245,7 +250,15 @@ def home_page():
     Cache.PATIENTS_CACHE = load_patients()
 
     get_icd_cache()
+    print(
+        'Preloading Settings Data...'
+    )
 
+    get_doctors()
+
+    print(
+        'Settings Cache Loaded'
+        )   
     # =====================================================
     # RUN
     # =====================================================

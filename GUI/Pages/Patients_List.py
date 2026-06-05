@@ -4,6 +4,7 @@ from fpdf import FPDF
 import sys
 sys.path.append("..")
 from Keys.PostGresKey import POSTGRES_URL
+from Components.Navigation import navigation_bar
 import pandas as pd
 import os
 from google.cloud import bigquery
@@ -147,6 +148,9 @@ search_input = None
 @ui.page('/patients')
 
 def patients_page():
+    navigation_bar(
+    active='patients'
+)
 
 
 
