@@ -259,7 +259,7 @@ def render_timetable_tab():
                         )
 
                     dialog.close()
-                    refresh()
+                    refresh_doctors_TimeTable_data()
                     safe_notify(client,
                         'Timetable Deleted',
                         'positive'
@@ -302,7 +302,7 @@ def render_timetable_tab():
                         )
 
                     dialog.close()
-                    refresh()
+                    refresh_doctors_TimeTable_data()
                     safe_notify(
                         client,
                         'Timetable Updated',
