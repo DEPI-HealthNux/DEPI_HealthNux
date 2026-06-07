@@ -1,10 +1,10 @@
 from nicegui import ui
 import Pages.Patients_List
 from Components.Navigation import navigation_bar
-import Pages.Settings
-from Pages.Settings import (
-    get_doctors
-)
+import Pages.Settings_Page.Settings
+from Pages.Settings_Page.Dr_List_Tab import render_doctors_tab
+from Pages.Settings_Page.Dr_List_Tab import get_doctors
+
 @ui.page('/')
 def home_page():
     # =====================================================
