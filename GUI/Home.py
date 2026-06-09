@@ -2,6 +2,7 @@ from nicegui import ui
 import Pages.Patients_List
 from Components.Navigation import navigation_bar
 import Pages.Settings_Page.Settings
+import Pages.Visits_Page.Visits
 from Pages.Settings_Page.Dr_List_Tab import render_doctors_tab
 from Pages.Settings_Page.Dr_List_Tab import get_doctors
 
@@ -34,8 +35,8 @@ def home_page():
 
     def open_visits():
 
-        ui.notify(
-            'Visits Page Coming Soon'
+        ui.navigate.to(
+            '/visits'
         )
 
     def open_payments():
@@ -155,7 +156,7 @@ def home_page():
                 )
 
                 ui.label(
-                    'Bookings & Completed Visits'
+                    'Available , Booked & Completed Visits'
                 ).classes(
                     'text-center text-gray-500'
                 )

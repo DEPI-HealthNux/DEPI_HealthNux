@@ -188,25 +188,7 @@ def timetable_form(record=None):
 
                 status_value = 'NotActive'
 
-        status_value = 'Active'
 
-        if record is not None:
-
-            if str(
-                record["is_active"]
-            ).upper() in [
-
-                'TRUE',
-                'ACTIVE',
-                '1'
-
-            ]:
-
-                status_value = 'Active'
-
-            else:
-
-                status_value = 'NotActive'
 
         status = ui.select(
             ['Active', 'NotActive'],
@@ -236,7 +218,7 @@ def render_timetable_tab():
 
         timetable_df = get_timetables()
 
-        refresh()
+        refresh(False)
 
     
     def open_delete_dialog(row):
@@ -581,11 +563,12 @@ def render_timetable_tab():
     # REFRESH
     # =========================================
 
-    def refresh():
+    def refresh(search_only=False):
 
         nonlocal timetable_df
-
-        timetable_df = refresh_timetable_cache()
+        
+        if not search_only:
+            timetable_df = refresh_timetable_cache()
 
         container.clear()
 
@@ -708,7 +691,7 @@ def render_timetable_tab():
                             )
 
                             doctor_df = doctor_df.sort_values(
-                                "_sort_day"
+                                ["_sort_day", "scheduled_start_time"]
                             )
 
                             days_text = " | ".join(
@@ -841,7 +824,7 @@ def render_timetable_tab():
 
     search.on(
         'keyup',
-        lambda e: refresh()
+        lambda e: refresh(True)
     )
 
     clear_btn.on(

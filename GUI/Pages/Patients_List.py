@@ -34,17 +34,16 @@ bq_client = bigquery.Client(
 
 def load_patients():
 
-        query = """
-        SELECT *
-        FROM patients_list
-        ORDER BY patient_name
-        """
+    query = """
+    SELECT *
+    FROM patients_list
+    ORDER BY patient_name
+    """
 
-        df = pd.read_sql(query, engine)
-
-        #df = df.fillna('')
-
-        return df.to_dict('records')
+    return pd.read_sql(
+        query,
+        engine
+    )
 def get_patients():
 
         if Cache.PATIENTS_CACHE is None:
@@ -276,34 +275,59 @@ def patients_page():
             search_input.value or ''
         ).strip().lower()
 
-        filtered = [
+        filtered = patients[
 
-                p for p in patients
+            patients["patient_name"]
 
-                if (
+            .fillna("")
 
-                    keyword in str(
-                        p.get("patient_name") or ""
-                    ).lower()
+            .astype(str)
 
-                    or
+            .str.lower()
 
-                    keyword in str(
-                        p.get("phone_number") or ""
-                    ).lower()
+            .str.contains(
+                keyword,
+                na=False
+            )
 
-                    or
+            |
 
-                    keyword == str(
-                        p.get("national_id") or ""
-                    ).lower()
+            patients["phone_number"]
 
-                )
-            ]
+            .fillna("")
+
+            .astype(str)
+
+            .str.lower()
+
+            .str.contains(
+                keyword,
+                na=False
+            )
+
+            |
+
+            (
+
+                patients["national_id"]
+
+                .fillna("")
+
+                .astype(str)
+
+                .str.lower()
+
+                ==
+
+                keyword
+
+            )
+
+        ]
 
         with patient_cards_container:
 
-            for patient in filtered:
+            for _, patient in filtered.iterrows():
 
                 with ui.card().classes(
                     'w-full p-4 rounded-2xl shadow-sm hover:shadow-md transition'
@@ -324,19 +348,25 @@ def patients_page():
                             )
 
                             ui.label(
-                                patient["phone_number"]
+                                str(
+                                    patient["phone_number"]
+                                )
                             ).classes(
                                 'text-gray-500'
                             )
 
-                        ui.button(
-                            icon='visibility',
-                            on_click=lambda p=patient:
-                            open_patient(p)
-                        ).props(
-                            'flat round'
-                        )
+                            current_patient = patient.copy()
 
+                            ui.button(
+
+                                icon='visibility',
+
+                                on_click=lambda p=current_patient:
+                                open_patient(p)
+
+                            ).props(
+                                'flat round'
+                            )
     # =====================================================
     # REFRESH TABS
     # =====================================================
@@ -714,12 +744,23 @@ def patients_page():
 
         global selected_patient
 
+        if hasattr(
+            patient,
+            "to_dict"
+        ):
+
+            patient = patient.to_dict()
+
         exists = any(
 
             p["patient_u_id"]
-            == patient["patient_u_id"]
+
+            ==
+
+            patient["patient_u_id"]
 
             for p in opened_patients
+
         )
 
         if not exists:
@@ -744,12 +785,20 @@ def patients_page():
 
         global selected_patient
 
+        if hasattr(
+            patient,
+            "to_dict"
+        ):
+
+            patient = patient.to_dict()
+
         opened_patients[:] = [
 
             p for p in opened_patients
 
             if p["patient_u_id"]
             != patient["patient_u_id"]
+
         ]
 
         if (
@@ -760,6 +809,7 @@ def patients_page():
 
             selected_patient["patient_u_id"]
             == patient["patient_u_id"]
+
         ):
 
             if opened_patients:
@@ -1036,7 +1086,20 @@ def patients_page():
                     conn.commit()
 
                 new_patient["patient_u_id"] = generated_id
-                Cache.PATIENTS_CACHE.append(new_patient)
+                Cache.PATIENTS_CACHE = pd.concat(
+                        [
+
+                            Cache.PATIENTS_CACHE,
+
+                            pd.DataFrame(
+                                [new_patient]
+                            )
+
+                        ],
+
+                        ignore_index=True
+
+                    )
                 refresh_patient_list()
                 open_patient(new_patient)
 
@@ -1395,6 +1458,7 @@ def patients_page():
             def delete():
 
                 client = ui.context.client
+                patient_id = patient["patient_u_id"]
 
                 with engine.connect() as conn:
 
@@ -1417,7 +1481,15 @@ def patients_page():
 
                     conn.commit()
 
-                Cache.PATIENTS_CACHE.remove(patient)
+                Cache.PATIENTS_CACHE = Cache.PATIENTS_CACHE[
+
+                    Cache.PATIENTS_CACHE["patient_u_id"]
+
+                    !=
+
+                    patient_id
+
+                ]
 
                 close_patient(
                     patient

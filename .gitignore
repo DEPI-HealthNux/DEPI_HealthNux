@@ -12,3 +12,4 @@ __pycache__/
 .idea/
 .vscode/
 Keys/
+generated_pdfs/
