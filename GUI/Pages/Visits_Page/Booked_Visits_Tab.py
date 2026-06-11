@@ -7,6 +7,12 @@ import sys
 import psycopg2
 sys.path.append("..")
 from Keys.PostGresKey import POSTGRES_URL
+from Components.Medication_Search import (search_medications)
+import ast
+from fpdf import FPDF
+from pathlib import Path
+
+
 engine = create_engine(
     POSTGRES_URL,
     pool_pre_ping=True
@@ -81,9 +87,10 @@ def get_icd_cache():
 
         icd_lookup = {}
 
+        chronic_options = {}
+
         for _, row in icd_df.iterrows():
 
-            chronic_options = {}
 
             display_text = (
 
@@ -283,9 +290,87 @@ def get_scans_cache():
 
     )
 
+def format_diagnosis_for_prescription(
+
+    diagnosis_codes
+
+):
+
+    if not diagnosis_codes:
+
+        return []
+
+    return [
+
+        Cache.ICD_LOOKUP_CACHE.get(
+            code,
+            code
+        )
+
+        for code in diagnosis_codes
+
+    ]
+
+def normalize_pg_array(value):
+
+    if value is None:
+
+        return []
+
+    if isinstance(value, list):
+
+        return value
+
+    if isinstance(value, tuple):
+
+        return list(value)
+
+    if isinstance(value, str):
+
+        value = value.strip()
+
+        if value == '':
+
+            return []
+
+        # JSON-like
+        if value.startswith('['):
+
+            try:
+
+                return ast.literal_eval(value)
+
+            except:
+
+                return []
+
+        # PostgreSQL Array
+        if value.startswith('{'):
+
+            value = value[1:-1]
+
+            if not value:
+
+                return []
+
+            return [
+
+                x.strip().replace('"', '')
+
+                for x in value.split(',')
+
+            ]
+
+    return []
+
 def format_requested_labs(codes):
 
+    if Cache.LABS_LOOKUP_CACHE is None:
+
+        get_labs_cache()
+
     if not codes:
+
         return "-"
 
     return "\n".join(
@@ -301,7 +386,12 @@ def format_requested_labs(codes):
 
 def format_requested_scans(codes):
 
+    if Cache.SCANS_LOOKUP_CACHE is None:
+
+        get_scans_cache()
+
     if not codes:
+
         return "-"
 
     return "\n".join(
@@ -317,14 +407,22 @@ def format_requested_scans(codes):
 
 def format_diagnosis_codes(codes):
 
+    if Cache.ICD_LOOKUP_CACHE is None:
+
+        get_icd_cache()
+
     if not codes:
+
         return "-"
 
     return "\n".join(
 
-        f"{code} - {Cache.ICD_LOOKUP_CACHE.get(code, code)}"
+        f"{code} - "
+
+        f"{Cache.ICD_LOOKUP_CACHE.get(code, code)}"
 
         for code in codes
+
     )
 
 def format_time(value):
@@ -347,8 +445,10 @@ def format_time(value):
     
 opened_visits = []
 selected_visit = None
-visit_tabs_container = None
+booked_visits_tabs_container = None
 visit_details_container = None
+left_panel_container = None
+medications_rows = []
 
 def get_booked_visits():
 
@@ -366,6 +466,14 @@ def get_booked_visits():
             bv.creation_time_stamp,
 
             bv.chief_complaint,
+
+            bv.diagnosis_codes,
+
+            bv.requested_labs,
+
+            bv.requested_scans,
+
+            bv.doctor_notes,
 
             bv.consultation_timestamp,
 
@@ -446,13 +554,83 @@ def get_booked_visits():
 
         """
 
-        Cache.BOOKED_VISITS_CACHE = pd.read_sql(
+        df = pd.read_sql(
             query,
             engine
         )
 
+        for col in [
+
+            "diagnosis_codes",
+
+            "requested_labs",
+
+            "requested_scans"
+
+        ]:
+
+            if col in df.columns:
+
+                df[col] = df[col].apply(
+                    normalize_pg_array
+                )
+
+        Cache.BOOKED_VISITS_CACHE = df
+
     return Cache.BOOKED_VISITS_CACHE
 
+
+def reload_Booked_visits():
+
+    global bookings_df
+
+    Cache.BOOKED_VISITS_CACHE = None
+
+    bookings_df = get_booked_visits()
+
+def reload_and_refresh_booked_visits():
+    global selected_visit
+    global opened_visits
+    reload_Booked_visits()
+
+    refresh_visit_tabs()
+  
+def get_chronic_diagnosis_codes(
+
+    diagnosis_codes
+
+):
+
+    icd_df, _, _, _ = get_icd_cache()
+
+    chronic_codes = set(
+
+        icd_df[
+
+            icd_df["ICD_Chronic"]
+
+            ==
+
+            True
+
+        ][
+
+            "ICD_Main_Disease_Code"
+
+        ]
+
+    )
+
+    return [
+
+        code
+
+        for code in diagnosis_codes
+
+        if code in chronic_codes
+
+    ]
+    
 def reload_booked_visits_cache():
 
     Cache.BOOKED_VISITS_CACHE = None
@@ -597,6 +775,9 @@ def update_visit_status(
     new_status
 ):
 
+    global opened_visits
+    global selected_visit
+
     with engine.connect() as conn:
 
         conn.execute(
@@ -605,23 +786,16 @@ def update_visit_status(
 
             UPDATE booked_visits
 
-            SET
+            SET status = :status
 
-                status = :status
-
-            WHERE
-
-                booking_key = :booking_key
+            WHERE booking_key = :booking_key
 
             """),
 
             {
 
-                "status":
-                    new_status,
-
-                "booking_key":
-                    booking_key
+                "status": new_status,
+                "booking_key": booking_key
 
             }
 
@@ -629,10 +803,86 @@ def update_visit_status(
 
         conn.commit()
 
-    reload_booked_visits_cache()
+    # Refresh cache
 
+    Cache.BOOKED_VISITS_CACHE = None
+
+    fresh_df = get_booked_visits()
+
+    # =========================
+    # UPDATE OPENED TABS
+    # =========================
+
+    for i, visit in enumerate(opened_visits):
+
+        if visit["booking_key"] == booking_key:
+
+            match = fresh_df[
+
+                fresh_df["booking_key"]
+
+                ==
+
+                booking_key
+
+            ]
+
+            if not match.empty:
+
+                opened_visits[i] = (
+
+                    match.iloc[0]
+
+                    .to_dict()
+
+                )
+
+    # =========================
+    # UPDATE SELECTED VISIT
+    # =========================
+
+    if selected_visit:
+
+        if selected_visit["booking_key"] == booking_key:
+
+            match = fresh_df[
+
+                fresh_df["booking_key"]
+
+                ==
+
+                booking_key
+
+            ]
+
+            if not match.empty:
+
+                selected_visit = (
+
+                    match.iloc[0]
+
+                    .to_dict()
+
+                )
+
+    # =========================
+    # REDRAW UI
+    # =========================
+
+    reload_and_refresh_booked_visits()
+
+    if selected_visit:
+
+        show_visit_details(
+            selected_visit
+        )
+    refresh_left_panel()
     ui.notify(
-        f'Visit Updated To {new_status}'
+
+        f'Visit Updated To {new_status}',
+
+        color='positive'
+
     )
 
 def get_visit_medications(
@@ -748,24 +998,24 @@ def render_admin_card(row):
 
                 )
 
-            )
-            ui.button(
-                icon='cancel'
-            ).props(
-                'flat round'
-            ).on(
+                )
+                ui.button(
+                    icon='cancel'
+                ).props(
+                    'flat round'
+                ).on(
 
-                    'click',
+                        'click',
 
-                    lambda bk=row["booking_key"]:
+                        lambda bk=row["booking_key"]:
 
-                    update_visit_status(
+                        update_visit_status(
 
-                        bk,
+                            bk,
 
-                        "Cancelled"
+                            "Cancelled"
 
-                    )
+                        )
 
                 )
 
@@ -856,7 +1106,19 @@ def render_section(
 
 def empty_visit_details():
 
-    visit_details_container.clear()
+    global visit_details_container
+
+    if visit_details_container is None:
+
+        return
+
+    try:
+
+        visit_details_container.clear()
+
+    except Exception:
+
+        return
 
     with visit_details_container:
 
@@ -891,10 +1153,930 @@ def empty_visit_details():
 
             )
 
-def show_visit_details(visit):
+def render_visit_header(
+    visit
+):
 
-    visit_details_container.clear()
+    with ui.card().classes(
 
+        'w-full p-4'
+
+    ):
+
+        with ui.row().classes(
+
+            'w-full gap-8'
+
+        ):
+
+            ui.label(
+                f'Booking: {visit["booking_key"]}'
+            )
+
+            ui.label(
+                f'Patient: {visit["patient_name"]}'
+            )
+
+            ui.label(
+                f'Doctor: {visit["dr_name"]}'
+            )
+
+        with ui.row().classes(
+
+            'w-full gap-8'
+
+        ):
+
+            ui.label(
+                f'Date: {visit["scheduled_date"]}'
+            )
+
+            ui.label(
+                f'Speciality: {visit["speciality"]}'
+            )
+
+            ui.label(
+                f'Status: {visit["status"]}'
+            )
+
+        ui.separator()
+
+        # ==========================
+        # VITALS
+        # ==========================
+
+        with ui.row().classes(
+            'gap-2'
+        ):
+
+            ui.button(
+
+                'Add Vitals',
+
+                icon='monitor_heart'
+
+            )
+
+            ui.button(
+
+                'Previous Vitals',
+
+                icon='history'
+
+            )
+
+def save_visit_consultation(
+
+    booking_key,
+
+    chief_complaint,
+
+    diagnosis_codes,
+
+    requested_labs,
+
+    requested_scans,
+
+    doctor_notes
+
+):
+
+    with engine.connect() as conn:
+
+        conn.execute(
+
+            text("""
+
+            UPDATE booked_visits
+
+            SET
+
+                chief_complaint = :chief_complaint,
+
+                diagnosis_codes = :diagnosis_codes,
+
+                requested_labs = :requested_labs,
+
+                requested_scans = :requested_scans,
+
+                doctor_notes = :doctor_notes
+
+            WHERE
+
+                booking_key = :booking_key
+
+            """),
+
+            {
+
+                "booking_key":
+                    booking_key,
+
+                "chief_complaint":
+                    chief_complaint,
+
+                "diagnosis_codes":
+                    diagnosis_codes,
+
+                "requested_labs":
+                    requested_labs,
+
+                "requested_scans":
+                    requested_scans,
+
+                "doctor_notes":
+                    doctor_notes
+
+            }
+
+        )
+
+        conn.commit()
+
+    Cache.BOOKED_VISITS_CACHE = None
+
+    ui.notify(
+
+        'Visit Saved Successfully',
+
+        color='positive'
+
+    )
+
+def update_patient_chronic_conditions(
+
+    patient_u_id,
+
+    diagnosis_codes
+
+):
+
+    chronic_diagnosis = (
+
+        get_chronic_diagnosis_codes(
+
+            diagnosis_codes
+
+        )
+
+    )
+
+    if not chronic_diagnosis:
+
+        return
+
+    with engine.connect() as conn:
+
+        existing = conn.execute(
+
+            text("""
+
+            SELECT
+
+                chronic_conditions
+
+            FROM patients_list
+
+            WHERE
+
+                patient_u_id
+
+                =
+
+                :patient_u_id
+
+            """),
+
+            {
+
+                "patient_u_id":
+
+                patient_u_id
+
+            }
+
+        ).scalar()
+
+        existing = normalize_pg_array(
+
+            existing
+
+        )
+
+        updated = list(
+
+            set(
+
+                existing
+
+                +
+
+                chronic_diagnosis
+
+            )
+
+        )
+
+        conn.execute(
+
+            text("""
+
+            UPDATE patients_list
+
+            SET
+
+                chronic_conditions = :conditions
+
+            WHERE
+
+                patient_u_id = :patient_u_id
+
+            """),
+
+            {
+
+                "conditions":
+                    updated,
+
+                "patient_u_id":
+                    patient_u_id
+
+            }
+
+        )
+
+        conn.commit()
+        Cache.PATIENTS_CACHE = None
+
+def save_visit_medications(
+
+    booking_key,
+
+    patient_u_id,
+
+    medications_rows
+
+):
+
+    with engine.connect() as conn:
+
+        conn.execute(
+
+            text("""
+
+            DELETE FROM rx_medications
+
+            WHERE
+
+                booking_key = :booking_key
+
+            """),
+
+            {
+
+                "booking_key":
+                booking_key
+
+            }
+
+        )
+
+        for row in medications_rows:
+
+            if not row.get(
+
+                "medication_name"
+
+            ):
+
+                continue
+
+            conn.execute(
+
+                text("""
+
+                INSERT INTO rx_medications (
+
+                    Booking_Key,
+
+                    Patient_U_ID,
+
+                    Medication_Name,
+
+                    Medictaion_Dose,
+
+                    Medictaion_Dose_Unit,
+
+                    Frequency,
+
+                    Frequency_Unit
+
+                )
+
+                VALUES (
+
+                    :booking_key,
+
+                    :patient_u_id,
+
+                    :medication_name,
+
+                    :dose,
+
+                    :dose_unit,
+
+                    :frequency,
+
+                    :frequency_unit
+
+                )
+
+                """),
+
+                {
+
+                    "booking_key":
+                    booking_key,
+
+                    "patient_u_id":
+                    patient_u_id,
+
+                    "medication_name":
+                    row.get(
+                        "medication_name"
+                    ),
+
+                    "dose":
+                    row.get(
+                        "dose"
+                    ),
+
+                    "dose_unit":
+                    row.get(
+                        "dose_unit"
+                    ),
+
+                    "frequency":
+                    row.get(
+                        "frequency"
+                    ),
+
+                    "frequency_unit":
+                    row.get(
+                        "frequency_unit"
+                    )
+
+                }
+
+            )
+
+        conn.commit()
+
+def generate_prescription_pdf(
+
+    visit,
+
+    medications_rows
+
+):
+
+    Path(
+
+        "Prescriptions"
+
+    ).mkdir(
+
+        exist_ok=True
+
+    )
+
+    pdf_path = (
+
+        f"Prescriptions/"
+
+        f"{visit['booking_key']}.pdf"
+
+    )
+
+    pdf = FPDF()
+
+    pdf.add_page()
+
+    pdf.set_auto_page_break(
+        auto=True,
+        margin=15
+    )
+
+    # ==========================
+    # HEADER
+    # ==========================
+
+    pdf.set_font(
+
+        "Arial",
+
+        "B",
+
+        18
+
+    )
+
+    pdf.cell(
+
+        0,
+
+        10,
+
+        "DEPI HealthNux Prescription",
+
+        ln=True,
+
+        align="C"
+
+    )
+
+    pdf.ln(5)
+
+    pdf.set_font(
+
+        "Arial",
+
+        "",
+
+        12
+
+    )
+
+    pdf.cell(
+
+        0,
+
+        8,
+
+        f"Patient: {visit['patient_name']}",
+
+        ln=True
+
+    )
+
+    pdf.cell(
+
+        0,
+
+        8,
+
+        f"Doctor: {visit['dr_name']}",
+
+        ln=True
+
+    )
+
+    pdf.cell(
+
+        0,
+
+        8,
+
+        f"Speciality: {visit['speciality']}",
+
+        ln=True
+
+    )
+
+    pdf.cell(
+
+        0,
+
+        8,
+
+        f"Date: {visit['scheduled_date']}",
+
+        ln=True
+
+    )
+
+    pdf.ln(5)
+
+    # ==========================
+    # DIAGNOSIS
+    # ==========================
+
+    pdf.set_font(
+
+        "Arial",
+
+        "B",
+
+        14
+
+    )
+
+    pdf.cell(
+
+        0,
+
+        8,
+
+        "Diagnosis",
+
+        ln=True
+
+    )
+
+    pdf.set_font(
+
+        "Arial",
+
+        "",
+
+        12
+
+    )
+
+    diagnoses = (
+
+        format_diagnosis_for_prescription(
+
+            visit.get(
+
+                "diagnosis_codes",
+
+                []
+
+            )
+
+        )
+
+    )
+
+    for diagnosis in diagnoses:
+
+        pdf.cell(
+
+            0,
+
+            8,
+
+            f"- {diagnosis}",
+
+            ln=True
+
+        )
+
+    pdf.ln(5)
+
+    # ==========================
+    # LABS
+    # ==========================
+
+    if visit.get(
+
+        "requested_labs"
+
+    ):
+
+        pdf.set_font(
+
+            "Arial",
+
+            "B",
+
+            14
+
+        )
+
+        pdf.cell(
+
+            0,
+
+            8,
+
+            "Requested Labs",
+
+            ln=True
+
+        )
+
+        pdf.set_font(
+
+            "Arial",
+
+            "",
+
+            12
+
+        )
+
+        for lab in visit[
+
+            "requested_labs"
+
+        ]:
+
+            pdf.cell(
+
+                0,
+
+                8,
+
+                f"- {Cache.LABS_LOOKUP_CACHE.get(lab, lab)}",
+
+                ln=True
+
+            )
+
+        pdf.ln(3)
+
+    # ==========================
+    # SCANS
+    # ==========================
+
+    if visit.get(
+
+        "requested_scans"
+
+    ):
+
+        pdf.set_font(
+
+            "Arial",
+
+            "B",
+
+            14
+
+        )
+
+        pdf.cell(
+
+            0,
+
+            8,
+
+            "Requested Scans",
+
+            ln=True
+
+        )
+
+        pdf.set_font(
+
+            "Arial",
+
+            "",
+
+            12
+
+        )
+
+        for scan in visit[
+
+            "requested_scans"
+
+        ]:
+
+            pdf.cell(
+
+                0,
+
+                8,
+
+                f"- {Cache.SCANS_LOOKUP_CACHE.get(scan, scan)}",
+
+                ln=True
+
+            )
+
+        pdf.ln(3)
+
+    # ==========================
+    # MEDICATIONS
+    # ==========================
+
+    pdf.set_font(
+
+        "Arial",
+
+        "B",
+
+        16
+
+    )
+
+    pdf.cell(
+
+        0,
+
+        10,
+
+        "Rx",
+
+        ln=True
+
+    )
+
+    pdf.set_font(
+
+        "Arial",
+
+        "",
+
+        12
+
+    )
+
+    counter = 1
+
+    for med in medications_rows:
+
+        if not med.get(
+
+            "medication_name"
+
+        ):
+
+            continue
+
+        pdf.multi_cell(
+
+            0,
+
+            8,
+
+            (
+
+                f"{counter}. "
+
+                f"{med['medication_name']} "
+
+                f"{med['dose']} "
+
+                f"{med['dose_unit']} "
+
+                f"- "
+
+                f"{med['frequency']} "
+
+                f"{med['frequency_unit']}"
+
+            )
+
+        )
+
+        counter += 1
+
+    pdf.output(
+
+        pdf_path
+
+    )
+
+    ui.notify(
+
+        "Prescription Generated",
+
+        color="positive"
+
+    )
+
+
+def complete_visit(
+
+    booking_key,
+
+    patient_u_id,
+
+    chief_complaint,
+
+    diagnosis_codes,
+
+    requested_labs,
+
+    requested_scans,
+
+    doctor_notes
+
+):
+
+    # ==========================
+    # SAVE VISIT FIRST
+    # ==========================
+
+    save_visit_consultation(
+
+        booking_key,
+
+        chief_complaint,
+
+        diagnosis_codes,
+
+        requested_labs,
+
+        requested_scans,
+
+        doctor_notes
+
+    )
+
+
+    update_patient_chronic_conditions(
+
+        patient_u_id,
+
+        diagnosis_codes
+
+    )
+
+
+    save_visit_medications(
+
+    booking_key,
+
+    patient_u_id,
+
+    medications_rows
+
+    )
+    # ==========================
+    # COMPLETE VISIT
+    # ==========================
+
+    with engine.connect() as conn:
+
+        conn.execute(
+
+            text("""
+
+            UPDATE booked_visits
+
+            SET
+
+                status = 'Completed',
+
+                consultation_timestamp = NOW()
+
+            WHERE
+
+                booking_key = :booking_key
+
+            """),
+
+            {
+
+                "booking_key":
+                    booking_key
+
+            }
+
+        )
+
+        conn.commit()
+
+    Cache.BOOKED_VISITS_CACHE = None
+    Cache.PATIENTS_CACHE = None
+
+    ui.notify(
+
+        'Visit Completed Successfully',
+
+        color='positive'
+
+    )
+
+    update_visit_status(
+
+        booking_key,
+
+        "Completed"
+
+    )
+
+MEDICATION_DOSE_UNITS = [
+
+    'tab',
+    'cap',
+    'amp',
+    'ml',
+    'iu',
+    'cap',
+    'drop',
+    'puff',
+    'sach'
+
+]
+
+MEDICATION_FREQUENCY_UNITS = [
+
+    'Time(s) Daily',
+    'Time(s) Weekly',
+    'Time(s) Monthly',
+    'PRN'
+
+]
+
+def render_visit_consultation(
+    visit
+):
     (
     _,
         ICD_OPTIONS,
@@ -914,245 +2096,489 @@ def show_visit_details(visit):
         SCAN_OPTIONS,
         _
     ) = get_scans_cache()
-    with visit_details_container:
 
-        # =====================================
-        # VISIT CONSULTATION
-        # =====================================
+    global medications_rows
 
-        with ui.expansion(
-
-            'Visit Consultation',
-
-            value=True
-
-        ).classes(
-
-            'w-full'
-
-        ):
-
-            with ui.column().classes(
-
-                'w-full gap-4 p-2'
-
-            ):
-
-                # ==========================
-                # VISIT INFORMATION
-                # ==========================
-
-                with ui.row().classes(
-                    'w-full gap-8'
+    with ui.expansion(
+                    'Visit Consultation',
+                    value=True
+                ).classes(
+                    'w-full'
                 ):
 
-                    ui.label(
-                        f'Booking: {visit["booking_key"]}'
-                    )
+                    with ui.column().classes(
 
-                    ui.label(
-                        f'Doctor: {visit["dr_name"]}'
-                    )
+                        'w-full gap-4 p-2'
 
-                    ui.label(
-                        f'Status: {visit["status"]}'
-                    )
+                    ):
+                                        
 
-                with ui.row().classes(
-                    'w-full gap-8'
-                ):
+                        # ==========================
+                        # CHIEF COMPLAINT
+                        # ==========================
 
-                    ui.label(
-                        f'Date: {visit["scheduled_date"]}'
-                    )
+                        chief_complaint = ui.textarea(
 
-                    ui.label(
-                        f'Speciality: {visit["speciality"]}'
-                    )
+                            'Chief Complaint',
 
-                ui.separator()
+                            value=visit.get(
+                                "chief_complaint",
+                                ""
+                            ) or ""
 
-                # ==========================
-                # VITALS
-                # ==========================
+                        ).classes(
+                            'w-full'
+                        )
 
-                with ui.row().classes(
-                    'gap-2'
-                ):
+                        # ==========================
+                        # DIAGNOSIS
+                        # ==========================
 
-                    ui.button(
+                        diagnosis_codes = ui.select(
 
-                        'Add Vitals',
+                            options=ICD_OPTIONS,
 
-                        icon='monitor_heart'
+                            label='Diagnosis',
 
-                    )
+                            multiple=True,
 
-                    ui.button(
+                            value=visit.get(
+                                "diagnosis_codes",
+                                []
+                            ) or []
 
-                        'Previous Vitals',
+                        ).props(
 
-                        icon='history'
+                            'use-input use-chips fill-input'
+                        ).classes(
+                            'w-full'
+                        )
 
-                    )
+                        # ==========================
+                        # LABS
+                        # ==========================
 
-                ui.separator()
+                        requested_labs = ui.select(
 
-                # ==========================
-                # CHIEF COMPLAINT
-                # ==========================
+                            options=LAB_OPTIONS,
+                            label='Labs to Request',
+                            multiple=True,
 
-                chief_complaint = ui.textarea(
+                            value=visit.get(
+                                "requested_labs"
+                            ) or []
 
-                    'Chief Complaint',
+                        ).props(
 
-                    value=visit.get(
-                        "chief_complaint",
-                        ""
-                    ) or ""
+                            'use-input use-chips fill-input'
 
-                ).classes(
-                    'w-full'
-                )
+                        ).classes(
 
-                # ==========================
-                # DIAGNOSIS
-                # ==========================
+                            'w-full'
 
-                diagnosis_codes = ui.select(
+                        )
 
-                    options=ICD_OPTIONS,
+                        # ==========================
+                        # SCANS
+                        # ==========================
 
-                    label='Diagnosis',
+                        requested_scans = ui.select(
 
-                    multiple=True,
+                            options=SCAN_OPTIONS,
+                            label='Scans to Request',
+                            multiple=True,
 
-                    value=visit.get(
-                        "diagnosis_codes",
-                        []
-                    ) or []
+                            value=visit.get(
+                                "requested_scans"
+                            ) or []
 
-                ).props(
+                        ).props(
 
-                    'use-input use-chips fill-input'
-                ).classes(
-                    'w-full'
-                )
+                            'use-input use-chips fill-input'
 
-                # ==========================
-                # LABS
-                # ==========================
+                        ).classes(
 
-                requested_labs = ui.select(
+                            'w-full'
 
-                    options=LAB_OPTIONS,
-                    label='Labs to Request',
-                    multiple=True,
+                        )
 
-                    value=visit.get(
-                        "requested_labs"
-                    ) or []
+                        # ==========================
+                        # DOCTOR NOTES
+                        # ==========================
 
-                ).props(
+                        doctor_notes = ui.textarea(
 
-                    'use-input use-chips fill-input'
+                            'Doctor Notes',
 
-                ).classes(
+                            value=visit.get(
+                                "doctor_notes",
+                                ""
+                            ) or ""
 
-                    'w-full'
+                        ).classes(
+                            'w-full'
+                        )
 
-                )
 
-                # ==========================
-                # SCANS
-                # ==========================
+                        # ==========================
+                        # MEDICATIONS
+                        # ==========================
 
-                requested_scans = ui.select(
+                        ui.separator()
 
-                    options=SCAN_OPTIONS,
-                    label='Scans to Request',
-                    multiple=True,
+                        ui.label(
 
-                    value=visit.get(
-                        "requested_scans"
-                    ) or []
+                            'Prescribed Medications'
 
-                ).props(
+                        ).classes(
 
-                    'use-input use-chips fill-input'
+                            'text-h6 font-bold'
 
-                ).classes(
+                        )
 
-                    'w-full'
+                        
 
-                )
+                        medications_container = ui.column().classes(
 
-                # ==========================
-                # DOCTOR NOTES
-                # ==========================
+                            'w-full gap-2'
 
-                doctor_notes = ui.textarea(
+                        )
 
-                    'Doctor Notes',
+                        def open_medication_search_dialog(row):
 
-                    value=visit.get(
-                        "doctor_notes",
-                        ""
-                    ) or ""
+                            with ui.dialog() as dialog:
 
-                ).classes(
-                    'w-full'
-                )
+                                with ui.card().classes('w-[800px]'):
 
-                ui.separator()
+                                    keyword = ui.input(
+                                        'Search Medication'
+                                    ).classes(
+                                        'w-full'
+                                    )
 
-                # ==========================
-                # ACTION BUTTONS
-                # ==========================
+                                    results_container = ui.column().classes(
+                                        'w-full'
+                                    )
 
-                with ui.row().classes(
-                    'w-full justify-end gap-2'
-                ):
+                                    def do_search():
 
-                    ui.button(
+                                        results_container.clear()
 
-                        'Save Visit',
+                                        drugs = search_medications(
+                                            keyword.value
+                                        )
 
-                        icon='save'
+                                        with results_container:
 
-                    )
+                                            for drug in drugs[:50]:
 
-                    ui.button(
+                                                ui.button(
 
-                        'Add Medications',
+                                                    drug,
 
-                        icon='medication'
+                                                    on_click=lambda d=drug:
 
-                    )
+                                                    select_drug(
+                                                        d
+                                                    )
 
-                    ui.button(
+                                                ).classes(
+                                                    'w-full'
+                                                )
 
-                        'Generate Prescription',
+                                    def select_drug(drug):
 
-                        icon='picture_as_pdf'
+                                        row["medication_name"] = drug
 
-                    )
+                                        render_medications()
 
-                    ui.button(
+                                        dialog.close()
 
-                        'Complete Visit',
+                                    ui.button(
 
-                        icon='task_alt',
+                                        'Search',
 
-                        color='green'
+                                        icon='search',
 
-                    )
+                                        on_click=do_search
 
-        # =====================================
-        # PATIENT PROFILE
-        # =====================================
+                                    )
 
-        with ui.expansion(
+                            dialog.open()
+
+                        def render_medications():
+
+                            medications_container.clear()
+
+                            with medications_container:
+
+                                for row in medications_rows:
+
+                                    with ui.row().classes(
+
+                                        'w-full items-center gap-2'
+
+                                    ):
+
+                                        med_name = ui.input(
+                                            'Medication'
+                                        ).classes(
+                                            'w-72'
+                                        )
+
+                                        ui.button(
+                                            icon='search',
+                                            on_click=lambda r=row:
+                                            open_medication_search_dialog(r)
+                                        )
+
+                                        med_name.bind_value(
+
+                                            row,
+
+                                            'medication_name'
+
+                                        )
+
+                                        dose = ui.number(
+
+                                            'Dose',
+
+                                            value=row.get(
+                                                'dose'
+                                            )
+
+                                        ).classes(
+
+                                            'w-24'
+
+                                        )
+
+                                        dose.bind_value(
+
+                                            row,
+
+                                            'dose'
+
+                                        )
+
+                                        dose_unit = ui.select(
+
+                                            options=MEDICATION_DOSE_UNITS,
+
+                                            value=row.get(
+                                                'dose_unit'
+                                            ) or MEDICATION_DOSE_UNITS[0]
+
+                                        ).classes(
+
+                                            'w-32'
+
+                                        )
+
+                                        dose_unit.bind_value(
+
+                                            row,
+
+                                            'dose_unit'
+
+                                        )
+
+                                        frequency = ui.number(
+
+                                            'Frequency',
+
+                                            value=row.get(
+                                                'frequency',
+                                                1
+                                            )
+
+                                        ).classes(
+
+                                            'w-24'
+
+                                        )
+
+                                        frequency.bind_value(
+
+                                            row,
+
+                                            'frequency'
+
+                                        )
+
+                                        frequency_unit = ui.select(
+
+                                            options=MEDICATION_FREQUENCY_UNITS,
+
+                                            value=row.get(
+                                                'frequency_unit'
+                                            ) or MEDICATION_FREQUENCY_UNITS[0]
+
+                                        ).classes(
+
+                                            'w-36'
+
+                                        )
+
+                                        frequency_unit.bind_value(
+
+                                            row,
+
+                                            'frequency_unit'
+
+                                        )
+
+                                        ui.button(
+
+                                            icon='close',
+
+                                            on_click=lambda r=row:
+
+                                            remove_medication_row(
+                                                r
+                                            )
+
+                                        ).props(
+
+                                            'flat round color=negative'
+
+                                        )
+
+                        def remove_medication_row(row):
+
+                            if row in medications_rows:
+
+                                medications_rows.remove(
+                                    row
+                                )
+
+                            render_medications()
+
+                        def add_medication_row():
+
+                            medications_rows.append(
+
+                                {
+
+                                    "medication_name": "",
+
+                                    "dose": None,
+
+                                    "dose_unit": MEDICATION_DOSE_UNITS[0],
+
+                                    "frequency": 1,
+
+                                    "frequency_unit": MEDICATION_FREQUENCY_UNITS[0]
+
+                                }
+
+                            )
+
+                            render_medications()
+                            
+
+                        ui.button(
+
+                            '+ Add Medication',
+
+                            icon='add',
+
+                            on_click=add_medication_row
+
+                        )
+
+                        ui.separator()
+
+
+                        # ==========================
+                        # ACTION BUTTONS
+                        # ==========================
+
+                        with ui.row().classes(
+                            'w-full justify-end gap-2'
+                        ):
+
+                            ui.button(
+
+                                'Save Visit',
+
+                                icon='save',
+
+                                on_click=lambda:
+
+                                save_visit_consultation(
+
+                                    visit["booking_key"],
+
+                                    chief_complaint.value,
+
+                                    diagnosis_codes.value,
+
+                                    requested_labs.value,
+
+                                    requested_scans.value,
+
+                                    doctor_notes.value
+
+                                )
+
+                            )
+
+                            ui.button(
+
+                                'Generate Prescription',
+
+                                icon='picture_as_pdf',
+
+                                color='red',
+
+                                on_click=lambda:
+
+                                generate_prescription_pdf(
+
+                                    visit,
+
+                                    medications_rows
+
+                                )
+
+                            )
+
+                            ui.button(
+
+                                'Complete Visit',
+
+                                icon='task_alt',
+
+                                color='green',
+
+                                on_click=lambda:
+
+                                complete_visit(
+
+                                    visit["booking_key"],
+
+                                    visit["patient_u_id"],
+
+                                    chief_complaint.value,
+
+                                    diagnosis_codes.value,
+
+                                    requested_labs.value,
+
+                                    requested_scans.value,
+
+                                    doctor_notes.value
+
+                                )
+
+                            )
+
+def render_patient_information(
+    visit
+):
+    with ui.expansion(
 
             'Patient Information',
 
@@ -1473,9 +2899,130 @@ def show_visit_details(visit):
 
                     )
 
+def show_visit_details(visit):
+
+    if visit_details_container is None:
+
+        return
+
+    try:
+
+        visit_details_container.clear()
+
+    except Exception:
+
+        return
+
+    
+    role = Cache.CURRENT_USER["role"]
+
+    is_admin = role in [
+
+        "Admin",
+
+        "Super Admin",
+
+        "Reception"
+
+    ]
+
+    is_doctor = role == "Doctor"
+
+
+    with visit_details_container:
+
+        render_visit_header(
+        visit
+        )
+
+        # =====================================
+        # VISIT CONSULTATION
+        # =====================================
+
+        if is_doctor:
+            render_visit_consultation(
+        visit
+        )
+
+        # =====================================
+        # PATIENT PROFILE
+        # =====================================
+        render_patient_information(
+        visit
+        )  
+
+def get_visit_by_booking_key(
+    booking_key
+):
+
+    fresh_df = get_booked_visits()
+
+    match = fresh_df[
+
+        fresh_df["booking_key"]
+
+        ==
+
+        booking_key
+
+    ]
+
+    if match.empty:
+
+        return None
+
+    visit = (
+
+        match.iloc[0]
+
+        .to_dict()
+
+    )
+
+    visit["diagnosis_codes"] = normalize_pg_array(
+
+        visit.get(
+            "diagnosis_codes"
+        )
+
+    )
+
+    visit["requested_labs"] = normalize_pg_array(
+
+        visit.get(
+            "requested_labs"
+        )
+
+    )
+
+    visit["requested_scans"] = normalize_pg_array(
+
+        visit.get(
+            "requested_scans"
+        )
+
+    )
+
+    return visit
+
+
 def open_visit(visit):
 
     global selected_visit
+
+    fresh_visit = (
+
+        get_visit_by_booking_key(
+
+            visit["booking_key"]
+
+        )
+
+    )
+
+    if fresh_visit:
+
+        visit = fresh_visit
 
     exists = any(
 
@@ -1494,6 +3041,28 @@ def open_visit(visit):
         opened_visits.append(
             visit
         )
+
+    else:
+
+        for i, v in enumerate(
+
+            opened_visits
+
+        ):
+
+            if (
+
+                v["booking_key"]
+
+                ==
+
+                visit["booking_key"]
+
+            ):
+
+                opened_visits[i] = visit
+
+                break
 
     selected_visit = visit
 
@@ -1561,9 +3130,21 @@ def close_visit(visit):
 
 def refresh_visit_tabs():
 
-    visit_tabs_container.clear()
+    global booked_visits_tabs_container
 
-    with visit_tabs_container:
+    if booked_visits_tabs_container is None:
+
+        return
+
+    try:
+
+        booked_visits_tabs_container.clear()
+
+    except RuntimeError:
+
+        return
+
+    with booked_visits_tabs_container:
 
         with ui.row().classes(
 
@@ -1673,9 +3254,97 @@ def refresh_visit_tabs():
 
                         )
 
-def render_booked_visits_tab():
+def refresh_left_panel():
+
+    global left_panel_container
+
+    if left_panel_container is None:
+
+        return
+
+    try:
+
+        left_panel_container.clear()
+
+    except Exception:
+
+        return
+
     bookings_df = get_booked_visits()
 
+    today = date.today()
+
+    tomorrow = today + timedelta(days=1)
+
+    bookings_df["scheduled_date"] = pd.to_datetime(
+        bookings_df["scheduled_date"]
+    ).dt.date
+
+    role = Cache.CURRENT_USER["role"]
+
+    is_admin = role in [
+
+        "Admin",
+        "Super Admin",
+        "Reception"
+
+    ]
+
+    is_doctor = role == "Doctor"
+
+    if is_doctor:
+
+        bookings_df = bookings_df[
+
+            bookings_df["dr_code"]
+
+            ==
+
+            Cache.CURRENT_USER["dr_code"]
+
+        ]
+
+    today_df = bookings_df[
+        bookings_df["scheduled_date"] == today
+    ]
+
+    tomorrow_df = bookings_df[
+        bookings_df["scheduled_date"] == tomorrow
+    ]
+
+    upcoming_df = bookings_df[
+        bookings_df["scheduled_date"] > tomorrow
+    ]
+
+    with left_panel_container:
+
+        render_section(
+            "Today's Visits",
+            today_df,
+            is_admin,
+            is_doctor
+        )
+
+        render_section(
+            "Tomorrow's Visits",
+            tomorrow_df,
+            is_admin,
+            is_doctor
+        )
+
+        render_section(
+            "Upcoming Visits",
+            upcoming_df,
+            is_admin,
+            is_doctor
+        )
+
+def render_booked_visits_tab():
+    global bookings_df
+    bookings_df = get_booked_visits()
+    global opened_visits
+    global selected_visit
+    global left_panel_container
     today = date.today()
 
     tomorrow = (
@@ -1746,11 +3415,13 @@ def render_booked_visits_tab():
 
     ):  
         # Left Section
-        with ui.column().classes(
 
-    'w-[450px] gap-2'
 
-        ):
+        left_panel_container = ui.column().classes(
+            'w-[450px] gap-2'
+        )
+
+        with left_panel_container:
 
     
 
@@ -1795,12 +3466,30 @@ def render_booked_visits_tab():
                 'flex-1 gap-4'
             ):
 
-                global visit_tabs_container
+                global booked_visits_tabs_container
                 global visit_details_container
 
-                visit_tabs_container = ui.column()
+                if booked_visits_tabs_container is None:
 
-                visit_details_container = ui.column().classes(
-                    'w-full'
-                )   
-    empty_visit_details()
+                    booked_visits_tabs_container = ui.column()
+
+                if visit_details_container is None:
+
+                    visit_details_container = ui.column().classes(
+                        'w-full'
+                    )
+
+                if selected_visit:
+
+                    show_visit_details(
+                        selected_visit
+                    )
+
+                else:
+
+                    empty_visit_details()
+
+
+
+                opened_visits = []
+                selected_visit = None

@@ -1,5 +1,6 @@
 from nicegui import ui
 import Cache
+import Pages.Visits_Page.Booked_Visits_Tab as BVT
 
 
 def navigation_bar(active='home'):
@@ -25,8 +26,21 @@ def navigation_bar(active='home'):
         ).props(
             active_style
         )
+
+
+    def reset_booked_visits_state():
+
+        BVT.booked_visits_tabs_container = None
+
+        BVT.visit_details_container = None
+
+        BVT.opened_visits = []
+
+        BVT.selected_visit = None
+
     def logout():
 
+        reset_booked_visits_state()
         Cache.CURRENT_USER = None
 
         ui.navigate.to('/')

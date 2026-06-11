@@ -17,9 +17,13 @@ def visits_page():
         ui.navigate.to('/')
 
         return
+
+
     navigation_bar(
     active='visits'
     )
+    role = Cache.CURRENT_USER["role"]
+    is_doctor = role == "Doctor"
 
     with ui.column().classes(
     'w-full p-4 gap-4'
@@ -30,23 +34,37 @@ def visits_page():
 
     with tabs:
 
-        tab_ava_visits = ui.tab(
-            '🕒 Available Visits'
-        )
+        if not is_doctor:
+
+            tab_ava_visits = ui.tab(
+                '🕒 Available Visits'
+            )
 
         tab_book_visits = ui.tab(
             '📅 Booked Visits'
         )
 
 
+    default_tab = (
+
+        tab_book_visits
+
+        if is_doctor
+
+        else tab_ava_visits
+
+    )
+
     with ui.tab_panels(
         tabs,
-        value=tab_ava_visits
+        value=default_tab
     ).classes(
         'w-full'
     ):
 
-        with ui.tab_panel(tab_ava_visits):
+        if not is_doctor:
+
+            with ui.tab_panel(tab_ava_visits):
 
                 render_available_visits_tab()
 
