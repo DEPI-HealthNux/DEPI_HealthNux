@@ -43,6 +43,11 @@ def get_scans():
 
 @ui.page('/settings')
 def settings_page():
+    if Cache.CURRENT_USER is None:
+
+        ui.navigate.to('/')
+
+        return
     navigation_bar(
     active='settings'
     )

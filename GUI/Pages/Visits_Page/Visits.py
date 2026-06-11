@@ -6,15 +6,21 @@ from google.cloud import bigquery
 from google.oauth2 import service_account
 from Components.Navigation import navigation_bar
 from Pages.Visits_Page.Available_Visits_Tab import render_available_visits_tab
-#from Pages.Settings_Page.Booked_Visits_Tab import render_timetable_tab
+from Pages.Visits_Page.Booked_Visits_Tab import render_booked_visits_tab
 import Cache
 
 
 @ui.page('/visits')
 def visits_page():
+    if Cache.CURRENT_USER is None:
+
+        ui.navigate.to('/')
+
+        return
     navigation_bar(
     active='visits'
     )
+
     with ui.column().classes(
     'w-full p-4 gap-4'
     ):
@@ -47,23 +53,8 @@ def visits_page():
 
         with ui.tab_panel(tab_book_visits):
 
-            with ui.card().classes(
-                'w-full p-8 rounded-2xl'
-            ):
+            render_booked_visits_tab()
 
-                ui.label(
-                    '📅 Booked Visits'
-                ).classes(
-                    'text-3xl font-bold'
-                )
-
-                ui.separator()
-
-                ui.label(
-                    'Coming Soon'
-                ).classes(
-                    'text-xl text-gray-500'
-                )
 
     # =========================================
     # SCROLL TO TOP

@@ -5,9 +5,16 @@ import Pages.Settings_Page.Settings
 import Pages.Visits_Page.Visits
 from Pages.Settings_Page.Dr_List_Tab import render_doctors_tab
 from Pages.Settings_Page.Dr_List_Tab import get_doctors
+import Cache
 
-@ui.page('/')
+@ui.page('/home')
+
 def home_page():
+    if Cache.CURRENT_USER is None:
+
+        ui.navigate.to('/')
+
+        return
     # =====================================================
     # PAGE STYLE
     # =====================================================
@@ -78,7 +85,9 @@ def home_page():
         ).classes(
             'text-xl text-gray-500 mb-8'
         )
-
+        ui.label(
+            f'Welcome {Cache.CURRENT_USER["email"]}'
+        )
         with ui.row().classes(
             'justify-center gap-8 flex-wrap'
         ):
@@ -242,7 +251,7 @@ def home_page():
     # =====================================================
     # IMPORT PAGES
     # =====================================================
-    import Cache
+    
     from Pages.Patients_List import (
         load_patients,
         get_icd_cache
@@ -264,7 +273,3 @@ def home_page():
     # RUN
     # =====================================================
 
-ui.run(
-    title='DEPI HealthNux',
-    reload=True
-)

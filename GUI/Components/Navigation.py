@@ -1,4 +1,5 @@
 from nicegui import ui
+import Cache
 
 
 def navigation_bar(active='home'):
@@ -24,6 +25,11 @@ def navigation_bar(active='home'):
         ).props(
             active_style
         )
+    def logout():
+
+        Cache.CURRENT_USER = None
+
+        ui.navigate.to('/')
 
     with ui.card().classes(
         '''
@@ -55,7 +61,7 @@ def navigation_bar(active='home'):
                 nav_button(
                     'Home',
                     'home',
-                    '/',
+                    '/home',
                     'home'
                 )
 
@@ -86,3 +92,8 @@ def navigation_bar(active='home'):
                     '/settings',
                     'settings'
                 )
+                ui.button(
+                    icon='logout',
+                    on_click=logout
+                )
+                
