@@ -448,7 +448,7 @@ selected_visit = None
 booked_visits_tabs_container = None
 visit_details_container = None
 left_panel_container = None
-medications_rows = []
+visit_medications = {}
 
 def get_booked_visits():
 
@@ -578,7 +578,6 @@ def get_booked_visits():
         Cache.BOOKED_VISITS_CACHE = df
 
     return Cache.BOOKED_VISITS_CACHE
-
 
 def reload_Booked_visits():
 
@@ -777,7 +776,7 @@ def update_visit_status(
 
     global opened_visits
     global selected_visit
-
+    client = ui.context.client
     with engine.connect() as conn:
 
         conn.execute(
@@ -877,7 +876,7 @@ def update_visit_status(
             selected_visit
         )
     refresh_left_panel()
-    ui.notify(
+    safe_notify(client,
 
         f'Visit Updated To {new_status}',
 
@@ -1229,6 +1228,8 @@ def save_visit_consultation(
 
     booking_key,
 
+    patient_u_id,
+
     chief_complaint,
 
     diagnosis_codes,
@@ -1239,7 +1240,20 @@ def save_visit_consultation(
 
     doctor_notes
 
-):
+    ):
+    client = ui.context.client
+    
+    save_visit_medications(
+
+    booking_key,
+
+    patient_u_id,
+
+    get_medications_rows(
+    booking_key
+    )
+
+    )
 
     with engine.connect() as conn:
 
@@ -1295,7 +1309,7 @@ def save_visit_consultation(
 
     Cache.BOOKED_VISITS_CACHE = None
 
-    ui.notify(
+    safe_notify(client,
 
         'Visit Saved Successfully',
 
@@ -1309,7 +1323,7 @@ def update_patient_chronic_conditions(
 
     diagnosis_codes
 
-):
+    ):
 
     chronic_diagnosis = (
 
@@ -1416,7 +1430,7 @@ def save_visit_medications(
 
     medications_rows
 
-):
+    ):
 
     with engine.connect() as conn:
 
@@ -1532,13 +1546,104 @@ def save_visit_medications(
 
         conn.commit()
 
+def load_visit_medications(
+    booking_key
+    ):
+
+    df = get_visit_medications(
+        booking_key
+    )
+
+    rows = []
+
+    for _, med in df.iterrows():
+
+        rows.append({
+
+            "medication_name":
+            med["medication_name"],
+
+            "dose":
+            med["medictaion_dose"],
+
+            "dose_unit":
+            med["medictaion_dose_unit"],
+
+            "frequency":
+            med["frequency"],
+
+            "frequency_unit":
+            med["frequency_unit"]
+
+        })
+
+    visit_medications[
+        booking_key
+    ] = rows
+
+def get_visit_for_pdf(
+
+    booking_key
+
+    ):
+
+    with engine.connect() as conn:
+
+        result = conn.execute(
+
+            text("""
+
+            SELECT
+
+                diagnosis_codes,
+                requested_labs,
+                requested_scans
+
+
+            FROM booked_visits
+
+            WHERE booking_key = :booking_key
+
+            """),
+
+            {
+
+                "booking_key":
+
+                booking_key
+
+            }
+
+        )
+
+        row = result.mappings().first()
+
+    if not row:
+
+        return {}
+
+    return dict(row)
+
 def generate_prescription_pdf(
-
+  
     visit,
+    
+    ):
+    fresh_visit = get_visit_for_pdf(
 
-    medications_rows
+        visit["booking_key"]
 
-):
+    )
+
+    medications_df = get_visit_medications(
+
+        visit["booking_key"]
+
+    )
+    client = ui.context.client
+    # =====================================
+    # CREATE FOLDER
+    # =====================================
 
     Path(
 
@@ -1558,18 +1663,33 @@ def generate_prescription_pdf(
 
     )
 
-    pdf = FPDF()
+    # =====================================
+    # PDF
+    # =====================================
+
+    pdf = FPDF(
+
+        orientation='P',
+
+        unit='mm',
+
+        format='A4'
+
+    )
 
     pdf.add_page()
 
     pdf.set_auto_page_break(
+
         auto=True,
+
         margin=15
+
     )
 
-    # ==========================
+    # =====================================
     # HEADER
-    # ==========================
+    # =====================================
 
     pdf.set_font(
 
@@ -1583,275 +1703,27 @@ def generate_prescription_pdf(
 
     pdf.cell(
 
-        0,
+        30,
 
         10,
 
-        "DEPI HealthNux Prescription",
+        "LOGO",
 
-        ln=True,
+        border=1,
 
         align="C"
 
     )
 
-    pdf.ln(5)
-
-    pdf.set_font(
-
-        "Arial",
-
-        "",
-
-        12
-
-    )
-
     pdf.cell(
 
-        0,
+        10,
 
-        8,
+        10,
 
-        f"Patient: {visit['patient_name']}",
-
-        ln=True
+        ""
 
     )
-
-    pdf.cell(
-
-        0,
-
-        8,
-
-        f"Doctor: {visit['dr_name']}",
-
-        ln=True
-
-    )
-
-    pdf.cell(
-
-        0,
-
-        8,
-
-        f"Speciality: {visit['speciality']}",
-
-        ln=True
-
-    )
-
-    pdf.cell(
-
-        0,
-
-        8,
-
-        f"Date: {visit['scheduled_date']}",
-
-        ln=True
-
-    )
-
-    pdf.ln(5)
-
-    # ==========================
-    # DIAGNOSIS
-    # ==========================
-
-    pdf.set_font(
-
-        "Arial",
-
-        "B",
-
-        14
-
-    )
-
-    pdf.cell(
-
-        0,
-
-        8,
-
-        "Diagnosis",
-
-        ln=True
-
-    )
-
-    pdf.set_font(
-
-        "Arial",
-
-        "",
-
-        12
-
-    )
-
-    diagnoses = (
-
-        format_diagnosis_for_prescription(
-
-            visit.get(
-
-                "diagnosis_codes",
-
-                []
-
-            )
-
-        )
-
-    )
-
-    for diagnosis in diagnoses:
-
-        pdf.cell(
-
-            0,
-
-            8,
-
-            f"- {diagnosis}",
-
-            ln=True
-
-        )
-
-    pdf.ln(5)
-
-    # ==========================
-    # LABS
-    # ==========================
-
-    if visit.get(
-
-        "requested_labs"
-
-    ):
-
-        pdf.set_font(
-
-            "Arial",
-
-            "B",
-
-            14
-
-        )
-
-        pdf.cell(
-
-            0,
-
-            8,
-
-            "Requested Labs",
-
-            ln=True
-
-        )
-
-        pdf.set_font(
-
-            "Arial",
-
-            "",
-
-            12
-
-        )
-
-        for lab in visit[
-
-            "requested_labs"
-
-        ]:
-
-            pdf.cell(
-
-                0,
-
-                8,
-
-                f"- {Cache.LABS_LOOKUP_CACHE.get(lab, lab)}",
-
-                ln=True
-
-            )
-
-        pdf.ln(3)
-
-    # ==========================
-    # SCANS
-    # ==========================
-
-    if visit.get(
-
-        "requested_scans"
-
-    ):
-
-        pdf.set_font(
-
-            "Arial",
-
-            "B",
-
-            14
-
-        )
-
-        pdf.cell(
-
-            0,
-
-            8,
-
-            "Requested Scans",
-
-            ln=True
-
-        )
-
-        pdf.set_font(
-
-            "Arial",
-
-            "",
-
-            12
-
-        )
-
-        for scan in visit[
-
-            "requested_scans"
-
-        ]:
-
-            pdf.cell(
-
-                0,
-
-                8,
-
-                f"- {Cache.SCANS_LOOKUP_CACHE.get(scan, scan)}",
-
-                ln=True
-
-            )
-
-        pdf.ln(3)
-
-    # ==========================
-    # MEDICATIONS
-    # ==========================
 
     pdf.set_font(
 
@@ -1860,6 +1732,214 @@ def generate_prescription_pdf(
         "B",
 
         16
+
+    )
+
+    pdf.cell(
+
+        0,
+
+        8,
+
+        visit["dr_name"],
+
+        ln=True
+
+    )
+
+    pdf.cell(
+
+        40,
+
+        8,
+
+        ""
+
+    )
+
+    pdf.set_font(
+
+        "Arial",
+
+        "",
+
+        12
+
+    )
+
+    pdf.cell(
+
+        0,
+
+        8,
+
+        visit["speciality"],
+
+        ln=True
+
+    )
+
+    pdf.ln(5)
+
+    pdf.line(
+
+        10,
+
+        pdf.get_y(),
+
+        200,
+
+        pdf.get_y()
+
+    )
+
+    pdf.ln(5)
+
+    # =====================================
+    # PATIENT INFO
+    # =====================================
+
+    pdf.set_font(
+
+        "Arial",
+
+        "",
+
+        12
+
+    )
+
+    pdf.cell(
+
+        100,
+
+        8,
+
+        f"Patient: {visit['patient_name']}"
+
+    )
+
+    pdf.cell(
+
+        0,
+
+        8,
+
+        f"Visit Date: {visit['scheduled_date']}",
+
+        ln=True
+
+    )
+
+    pdf.ln(3)
+
+    pdf.line(
+
+        10,
+
+        pdf.get_y(),
+
+        200,
+
+        pdf.get_y()
+
+    )
+
+    pdf.ln(5)
+
+    # =====================================
+    # DIAGNOSIS
+    # =====================================
+    diagnosis_codes = normalize_pg_array(
+
+        fresh_visit.get(
+            "diagnosis_codes"
+        )
+    )
+
+    diagnoses = [
+
+        Cache.ICD_LOOKUP_CACHE.get(
+            code,
+            code
+        )
+
+        for code in diagnosis_codes
+    ]
+
+    if diagnoses:
+
+        pdf.set_font(
+
+            "Arial",
+
+            "B",
+
+            12
+
+        )
+
+        pdf.cell(
+
+            25,
+
+            8,
+
+            "Diagnosis:"
+
+        )
+
+        pdf.set_font(
+
+            "Arial",
+
+            "",
+
+            12
+
+        )
+
+        pdf.multi_cell(
+
+            160,
+
+            8,
+
+            ", ".join(
+
+                diagnoses
+
+            )
+
+        )
+
+        pdf.ln(2)
+
+        pdf.line(
+
+            10,
+
+            pdf.get_y(),
+
+            200,
+
+            pdf.get_y()
+
+        )
+
+        pdf.ln(5)
+
+    # =====================================
+    # RX
+    # =====================================
+
+    pdf.set_font(
+
+        "Arial",
+
+        "B",
+
+        18
 
     )
 
@@ -1881,23 +1961,43 @@ def generate_prescription_pdf(
 
         "",
 
-        12
+        13
 
     )
 
-    counter = 1
+    for _, med in medications_df.iterrows():
 
-    for med in medications_rows:
-
-        if not med.get(
+        medication_name = med.get(
 
             "medication_name"
 
-        ):
+        )
+
+        if not medication_name:
 
             continue
 
-        pdf.multi_cell(
+        dose = med.get(
+            "medictaion_dose"
+        ) or ""
+
+        dose_unit = med.get(
+            "medictaion_dose_unit"
+        ) or ""
+
+        frequency = med.get(
+
+            "frequency"
+
+        ) or ""
+
+        frequency_unit = med.get(
+
+            "frequency_unit"
+
+        ) or ""
+
+        pdf.cell(
 
             0,
 
@@ -1905,25 +2005,185 @@ def generate_prescription_pdf(
 
             (
 
-                f"{counter}. "
+                f"{medication_name} "
 
-                f"{med['medication_name']} "
+                f"{dose} "
 
-                f"{med['dose']} "
+                f"{dose_unit}"
 
-                f"{med['dose_unit']} "
+                f" - "
 
-                f"- "
+                f"{frequency} "
 
-                f"{med['frequency']} "
+                f"{frequency_unit}"
 
-                f"{med['frequency_unit']}"
+            ),
 
-            )
+            ln=True
 
         )
 
-        counter += 1
+    pdf.ln(3)
+
+    # =====================================
+    # LABS
+    # =====================================
+
+    requested_labs = fresh_visit.get(
+
+        "requested_labs"
+
+    ) or []
+
+    if requested_labs:
+
+        pdf.line(
+
+            10,
+
+            pdf.get_y(),
+
+            200,
+
+            pdf.get_y()
+
+        )
+
+        pdf.ln(4)
+
+        pdf.set_font(
+
+            "Arial",
+
+            "B",
+
+            12
+
+        )
+
+        pdf.cell(
+
+            0,
+
+            8,
+
+            "Requested Labs",
+
+            ln=True
+
+        )
+
+        pdf.set_font(
+
+            "Arial",
+
+            "",
+
+            11
+
+        )
+
+        for lab in requested_labs:
+
+            pdf.cell(
+
+                0,
+
+                8,
+
+                Cache.LABS_LOOKUP_CACHE.get(
+
+                    lab,
+
+                    lab
+
+                ),
+
+                ln=True
+
+            )
+
+    # =====================================
+    # SCANS
+    # =====================================
+
+    requested_scans = fresh_visit.get(
+
+        "requested_scans"
+
+    ) or []
+
+    if requested_scans:
+
+        pdf.line(
+
+            10,
+
+            pdf.get_y(),
+
+            200,
+
+            pdf.get_y()
+
+        )
+
+        pdf.ln(4)
+
+        pdf.set_font(
+
+            "Arial",
+
+            "B",
+
+            12
+
+        )
+
+        pdf.cell(
+
+            0,
+
+            8,
+
+            "Requested Scans",
+
+            ln=True
+
+        )
+
+        pdf.set_font(
+
+            "Arial",
+
+            "",
+
+            11
+
+        )
+
+        for scan in requested_scans:
+
+            pdf.cell(
+
+                0,
+
+                8,
+
+                Cache.SCANS_LOOKUP_CACHE.get(
+
+                    scan,
+
+                    scan
+
+                ),
+
+                ln=True
+
+            )
+
+    # =====================================
+    # SAVE
+    # =====================================
 
     pdf.output(
 
@@ -1931,14 +2191,13 @@ def generate_prescription_pdf(
 
     )
 
-    ui.notify(
+    safe_notify(client,
 
-        "Prescription Generated",
+        f'Prescription Saved: {pdf_path}',
 
-        color="positive"
+        color='positive'
 
     )
-
 
 def complete_visit(
 
@@ -1957,7 +2216,7 @@ def complete_visit(
     doctor_notes
 
 ):
-
+    client = ui.context.client
     # ==========================
     # SAVE VISIT FIRST
     # ==========================
@@ -1965,6 +2224,8 @@ def complete_visit(
     save_visit_consultation(
 
         booking_key,
+
+        patient_u_id,
 
         chief_complaint,
 
@@ -1994,7 +2255,9 @@ def complete_visit(
 
     patient_u_id,
 
-    medications_rows
+    get_medications_rows(
+        booking_key
+    )
 
     )
     # ==========================
@@ -2035,7 +2298,7 @@ def complete_visit(
     Cache.BOOKED_VISITS_CACHE = None
     Cache.PATIENTS_CACHE = None
 
-    ui.notify(
+    safe_notify(client,
 
         'Visit Completed Successfully',
 
@@ -2076,7 +2339,7 @@ MEDICATION_FREQUENCY_UNITS = [
 
 def render_visit_consultation(
     visit
-):
+    ):
     (
     _,
         ICD_OPTIONS,
@@ -2097,7 +2360,27 @@ def render_visit_consultation(
         _
     ) = get_scans_cache()
 
-    global medications_rows
+    medications_rows = get_medications_rows(
+
+    visit["booking_key"]
+
+    )
+
+    if not medications_rows:
+
+        medications_rows.append({
+
+            "medication_name": "",
+
+            "dose": None,
+
+            "dose_unit": MEDICATION_DOSE_UNITS[0],
+
+            "frequency": 1,
+
+            "frequency_unit": MEDICATION_FREQUENCY_UNITS[0]
+
+        })
 
     with ui.expansion(
                     'Visit Consultation',
@@ -2455,36 +2738,42 @@ def render_visit_consultation(
 
                             render_medications()
 
-                        def add_medication_row():
+                        def add_medication_row(
+                            booking_key
+                        ):
 
-                            medications_rows.append(
-
-                                {
-
-                                    "medication_name": "",
-
-                                    "dose": None,
-
-                                    "dose_unit": MEDICATION_DOSE_UNITS[0],
-
-                                    "frequency": 1,
-
-                                    "frequency_unit": MEDICATION_FREQUENCY_UNITS[0]
-
-                                }
-
+                            medications_rows = get_medications_rows(
+                                booking_key
                             )
+
+                            medications_rows.append({
+
+                                "medication_name": "",
+
+                                "dose": None,
+
+                                "dose_unit": MEDICATION_DOSE_UNITS[0],
+
+                                "frequency": 1,
+
+                                "frequency_unit": MEDICATION_FREQUENCY_UNITS[0]
+
+                            })
 
                             render_medications()
                             
 
                         ui.button(
 
-                            '+ Add Medication',
+                            'Add Medication',
 
-                            icon='add',
+                            on_click=lambda:
 
-                            on_click=add_medication_row
+                            add_medication_row(
+
+                                visit["booking_key"]
+
+                            )
 
                         )
 
@@ -2507,21 +2796,23 @@ def render_visit_consultation(
 
                                 on_click=lambda:
 
-                                save_visit_consultation(
+                                    save_visit_consultation(
 
-                                    visit["booking_key"],
+                                        visit["booking_key"],
 
-                                    chief_complaint.value,
+                                        visit["patient_u_id"],
 
-                                    diagnosis_codes.value,
+                                        chief_complaint.value,
 
-                                    requested_labs.value,
+                                        diagnosis_codes.value,
 
-                                    requested_scans.value,
+                                        requested_labs.value,
 
-                                    doctor_notes.value
+                                        requested_scans.value,
 
-                                )
+                                        doctor_notes.value
+
+                                    )
 
                             )
 
@@ -2536,11 +2827,7 @@ def render_visit_consultation(
                                 on_click=lambda:
 
                                 generate_prescription_pdf(
-
-                                    visit,
-
-                                    medications_rows
-
+                                    visit
                                 )
 
                             )
@@ -3005,6 +3292,19 @@ def get_visit_by_booking_key(
 
     return visit
 
+def get_medications_rows(
+    booking_key
+):
+
+    if booking_key not in visit_medications:
+
+        visit_medications[
+            booking_key
+        ] = []
+
+    return visit_medications[
+        booking_key
+    ]
 
 def open_visit(visit):
 
@@ -3065,6 +3365,10 @@ def open_visit(visit):
                 break
 
     selected_visit = visit
+
+    load_visit_medications(
+        visit["booking_key"]
+    )
 
     refresh_visit_tabs()
 
@@ -3469,15 +3773,11 @@ def render_booked_visits_tab():
                 global booked_visits_tabs_container
                 global visit_details_container
 
-                if booked_visits_tabs_container is None:
+                booked_visits_tabs_container = ui.column()
 
-                    booked_visits_tabs_container = ui.column()
-
-                if visit_details_container is None:
-
-                    visit_details_container = ui.column().classes(
-                        'w-full'
-                    )
+                visit_details_container = ui.column().classes(
+                    'w-full'
+                )
 
                 if selected_visit:
 
@@ -3491,5 +3791,4 @@ def render_booked_visits_tab():
 
 
 
-                opened_visits = []
-                selected_visit = None
+            

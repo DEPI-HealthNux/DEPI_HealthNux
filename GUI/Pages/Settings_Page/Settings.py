@@ -81,21 +81,6 @@ def settings_page():
             '📅 Dr Timetable'
         )
 
-        tab_visits = ui.tab(
-            '🕒 Available Visits'
-        )
-
-        tab_icd = ui.tab(
-            '🩺 ICD Codes'
-        )
-
-        tab_labs = ui.tab(
-            '🧪 Labs Ref'
-        )
-
-        tab_scans = ui.tab(
-            '📷 Scan Ref'
-        )
 
     with ui.tab_panels(
         tabs,

@@ -120,11 +120,9 @@ def get_available_visits():
                         av.capacity -
                         COUNT(
                             CASE
-                                WHEN COALESCE(
-                                    bv.status,
-                                    'Booked'
-                                ) <> 'Cancelled'
-                                THEN 1
+                                WHEN bv.booking_key IS NOT NULL
+                                AND bv.status <> 'Cancelled'
+                                THEN bv.booking_key
                             END
                         )
                     ) AS remaining_capacity
