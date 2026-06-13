@@ -71,7 +71,7 @@ Analytics & Reporting
 
 | Team Member        | Role                                         |
 | ------------------ | -------------------------------------------- |
-| **Sedeek Elmasry** | Technical Lead & Data Engineering Lead       |
+| **Sedeek Ashraf** | Technical Lead & Data Engineering Lead       |
 | **Nermeen Diaa**   | System Analysis & Architecture Documentation |
 | **Ghada Fathy**    | Database Development Support                 |
 | **Ahmed Magdy**    | Presentation & Project Communication         |
@@ -80,8 +80,8 @@ Analytics & Reporting
 
 ## Contribution Summary
 
-### Sedeek Elmasry
-
+### Sedeek Ashraf 
+GitHub: @sedeekelmasry-geni
 * System Analysis
 * Database Architecture
 * PostgreSQL Implementation
@@ -98,20 +98,20 @@ Analytics & Reporting
 * Technical Leadership
 
 ### Nermeen Diaa
-
+GitHub: @NerminDiaa
 * ERD Design
 * Data Pipeline Design
 * System Architecture Documentation
 * Technical Diagrams
 
 ### Ghada Fathy
-
+GitHub: @drghadaali
 * Doctors Table Development
 * Vitals Table Development
 * Database Support & Validation
 
 ### Ahmed Magdy
-
+GitHub: @ahmaddiaa949-alt
 * Presentation Design
 * Project Demonstration Support
 * Project Communication Materials
@@ -417,7 +417,7 @@ Integrated through web scraping to provide medication lookup functionality.
 Documentation Link:
 
 ```text
-[https://drive.google.com/file/d/1qtkdV94bzPvdNTSMmPGcw1Mh0GVPgA3I/view?usp=sharing]
+https://drive.google.com/file/d/1qtkdV94bzPvdNTSMmPGcw1Mh0GVPgA3I/view?usp=sharing
 ```
 
 ---
@@ -427,7 +427,7 @@ Documentation Link:
 Demo Video Link:
 
 ```text
-[https://drive.google.com/file/d/1t2y69PEZ6flOh1fPJTYc6LvFzLCsVCO2/view?usp=sharing]
+https://drive.google.com/file/d/1t2y69PEZ6flOh1fPJTYc6LvFzLCsVCO2/view?usp=sharing
 ```
 
 ---
@@ -437,7 +437,7 @@ Demo Video Link:
 Project Website:
 
 ```text
-[https://claude.ai/public/artifacts/87e6d925-40e5-4595-b107-00222e6fe79f]
+https://claude.ai/public/artifacts/87e6d925-40e5-4595-b107-00222e6fe79f
 ```
 
 ---
